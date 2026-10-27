@@ -121,10 +121,7 @@ INFLUX_BUCKET=plant_data
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
-```
-
-*(Or install core packages directly: `pip install streamlit langgraph paho-mqtt protobuf influxdb-client google-genai python-dotenv mcp`)*
+pip install streamlit langgraph paho-mqtt protobuf influxdb-client google-genai python-dotenv mcp
 
 ---
 
