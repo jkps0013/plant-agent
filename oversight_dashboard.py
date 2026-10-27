@@ -336,15 +336,29 @@ with col_approval:
 
         with c_rej:
             if st.button("❌ Reject Action", use_container_width=True):
-                st.session_state.agent.update_state(
-                    st.session_state.config, {"approval": False}
-                )
-                final = st.session_state.agent.invoke(None, config=st.session_state.config)
+                try:
+                    st.session_state.agent.update_state(
+                        st.session_state.config, {"approval": False}
+                    )
+                    final = st.session_state.agent.invoke(None, config=st.session_state.config)
+                    st.session_state.last_result = final
+                except Exception:
+                    entry = {
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "metric_path": st.session_state.active_anomaly.get("metric") if st.session_state.active_anomaly else "unknown",
+                        "value": st.session_state.active_anomaly.get("value") if st.session_state.active_anomaly else None,
+                        "anomalies": [st.session_state.active_anomaly] if st.session_state.active_anomaly else [],
+                        "recommendation": st.session_state.paused_state.get("recommendation", {}) if st.session_state.paused_state else {},
+                        "approval": False,
+                        "action_taken": False
+                    }
+                    with open("agent_audit_log.jsonl", "a") as f:
+                        f.write(json.dumps(entry) + "\n")
+
                 if st.session_state.active_anomaly:
                     st.session_state.latched_anomalies.add(st.session_state.active_anomaly["metric"])
                 st.session_state.paused_state = None
-                st.session_state.last_result = final
-                st.session_state.approval_message = "⚠️ **Action rejected by operator. No work order created.**"
+                st.session_state.approval_message = "⚠️ **Action rejected by operator. Logged to audit trail. No work order created.**"
                 st.rerun(scope="app")
     else:
         st.success("🟢 **No Action Pending Approval**")
@@ -379,12 +393,34 @@ with col_hist2:
             if lines:
                 for line in reversed(lines[-6:]):
                     data = json.loads(line)
-                    status_icon = "🟢" if not data.get("anomalies") else ("✅" if data.get("action_taken") else "🛑")
-                    st.markdown(f"{status_icon} **{data.get('timestamp')}** — `{data.get('metric_path')}` (Val: `{data.get('value')}`)")
-                    if data.get("anomalies"):
-                        st.caption(f"Action: {data.get('recommendation', {}).get('action')} | Executed: {data.get('action_taken')}")
+                    approval = data.get("approval")
+                    action_taken = data.get("action_taken")
+                    rec_action = data.get("recommendation", {}).get("action", "None")
+
+                    if not data.get("anomalies"):
+                        icon = "🟢"
+                        label = "Normal Baseline Cycle"
+                        detail = "All process metrics operating within statistical limits."
+                    elif approval is False:
+                        icon = "❌"
+                        label = "Rejected by Supervisor"
+                        detail = f"Action: `{rec_action}` | Decision: Operator rejected (No work order created)."
+                    elif approval is True and action_taken:
+                        icon = "✅"
+                        label = "Approved & Work Order Created"
+                        detail = f"Action: `{rec_action}` | Decision: Approved | Guardrails verified."
+                    elif approval is True and not action_taken:
+                        icon = "🛑"
+                        label = "Blocked by Safety Guardrails"
+                        detail = f"Action: `{rec_action}` | Decision: Approved by operator, but blocked by safety guardrails."
                     else:
-                        st.caption("Normal cycle completed.")
+                        icon = "⚠️"
+                        label = "Anomaly Logged"
+                        detail = f"Action: `{rec_action}`"
+
+                    st.markdown(f"{icon} **{data.get('timestamp')}** — `{data.get('metric_path')}` (Val: `{data.get('value')}`)")
+                    st.caption(f"**{label}** • {detail}")
+                    st.markdown("---")
             else:
                 st.write("Audit log is currently empty.")
         except Exception:
