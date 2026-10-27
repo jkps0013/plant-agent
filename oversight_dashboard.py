@@ -108,38 +108,6 @@ def evaluate_plant_state():
     return detected_anomalies
 
 
-if st.session_state.get("pending_diagnosis"):
-    target = st.session_state.pending_diagnosis
-    st.session_state.pending_diagnosis = None
-
-    with st.spinner(f"🤖 Auto-Sentinel: Anomaly detected on {target['label']} ({target['value']})! Formulating advisory with Gemini..."):
-        thread_id = f"diagnosis-{int(time.time() * 1000)}"
-        st.session_state.config = {"configurable": {"thread_id": thread_id}}
-
-        initial_state = {
-            "metric_path": target["metric"],
-            "value": target["value"],
-            "context": {},
-            "report": "",
-            "baseline": target["baseline"],
-            "anomalies": [target],
-            "recommendation": {},
-            "approval": None,
-            "action_taken": False
-        }
-
-        try:
-            result = st.session_state.agent.invoke(initial_state, config=st.session_state.config)
-            next_node = st.session_state.agent.get_state(st.session_state.config).next
-
-            if next_node == ("act",):
-                st.session_state.paused_state = result
-                st.session_state.active_anomaly = target
-                st.session_state.approval_message = None
-        except Exception as e:
-            st.error(f"⚠️ **Sentinel Reasoning Warning:** {e}")
-
-
 col_status, col_approval = st.columns([1, 1], gap="large")
 
 with col_status:
@@ -204,7 +172,9 @@ with col_status:
             if metric_key not in st.session_state.latched_anomalies:
                 if st.session_state.paused_state is not None:
                     st.warning("⏸️ **Advisory ready — awaiting Supervisor Decision in the Approval Panel on the right.**")
-                elif not st.session_state.get("pending_diagnosis"):
+                elif st.session_state.get("pending_diagnosis"):
+                    st.info("🤖 **Auto-Sentinel: Anomaly detected! Diagnosing line with Gemini in the Approval Panel...**")
+                else:
                     st.session_state.pending_diagnosis = primary
                     st.rerun(scope="app")
             else:
@@ -291,6 +261,37 @@ with col_approval:
 
     if st.session_state.approval_message:
         st.success(st.session_state.approval_message)
+
+    if st.session_state.get("pending_diagnosis") and st.session_state.paused_state is None:
+        target = st.session_state.pending_diagnosis
+        st.session_state.pending_diagnosis = None
+
+        with st.spinner(f"🤖 Auto-Sentinel: Diagnosing {target['label']} ({target['value']}) with Gemini..."):
+            thread_id = f"diagnosis-{int(time.time() * 1000)}"
+            st.session_state.config = {"configurable": {"thread_id": thread_id}}
+
+            initial_state = {
+                "metric_path": target["metric"],
+                "value": target["value"],
+                "context": {},
+                "report": "",
+                "baseline": target["baseline"],
+                "anomalies": [target],
+                "recommendation": {},
+                "approval": None,
+                "action_taken": False
+            }
+
+            try:
+                result = st.session_state.agent.invoke(initial_state, config=st.session_state.config)
+                next_node = st.session_state.agent.get_state(st.session_state.config).next
+
+                if next_node == ("act",):
+                    st.session_state.paused_state = result
+                    st.session_state.active_anomaly = target
+                    st.session_state.approval_message = None
+            except Exception as e:
+                st.error(f"⚠️ **Sentinel Reasoning Warning:** {e}")
 
     if st.session_state.paused_state:
         rec = st.session_state.paused_state.get("recommendation", {})
