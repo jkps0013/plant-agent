@@ -122,7 +122,7 @@ Install dependencies:
 
 ```bash
 pip install streamlit langgraph paho-mqtt protobuf influxdb-client google-genai python-dotenv mcp
-
+```
 ---
 
 ## Running the Application
