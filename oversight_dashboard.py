@@ -162,27 +162,49 @@ with col_status:
         anomalies = evaluate_plant_state()
 
         if anomalies:
-            primary = anomalies[0]
-            metric_key = primary["metric"]
+            unlatched = [a for a in anomalies if a["metric"] not in st.session_state.latched_anomalies]
 
-            st.error(f"🚨 **ACTIVE ISSUE DETECTED ({len(anomalies)} metric(s) out of InfluxDB baseline):**")
+            if len(anomalies) > 1:
+                st.error(f"🚨 **CORRELATED PROCESS ANOMALY DETECTED ({len(anomalies)} metrics out of InfluxDB baseline):**")
+            else:
+                st.error(f"🚨 **ACTIVE ISSUE DETECTED ({len(anomalies)} metric(s) out of InfluxDB baseline):**")
+
             for a in anomalies:
                 st.markdown(f"- **{a['label']}** is `{a['value']}` (InfluxDB 48h Baseline: `[{a['normal_low']}, {a['normal_high']}]`)")
 
-            if metric_key not in st.session_state.latched_anomalies:
+            if unlatched:
                 if st.session_state.paused_state is not None:
                     st.warning("⏸️ **Advisory ready — awaiting Supervisor Decision in the Approval Panel on the right.**")
                 elif st.session_state.get("pending_diagnosis"):
                     st.info("🤖 **Auto-Sentinel: Anomaly detected! Diagnosing line with Gemini in the Approval Panel...**")
                 else:
-                    st.session_state.pending_diagnosis = primary
+                    primary = unlatched[0]
+                    st.session_state.pending_diagnosis = {
+                        "primary": primary,
+                        "anomalies": anomalies,
+                        "metric": primary["metric"],
+                        "value": primary["value"],
+                        "baseline": primary["baseline"],
+                        "label": " & ".join([a["label"] for a in anomalies]),
+                        "display_val": ", ".join([f"{a['label']}: {a['value']}" for a in anomalies])
+                    }
                     st.rerun(scope="app")
             else:
                 st.info("ℹ️ **Active issue acknowledged & logged by supervisor.** Monitoring process recovery to baseline.")
                 if st.button("⚡ Re-diagnose Issue", use_container_width=True):
-                    st.session_state.latched_anomalies.discard(metric_key)
+                    for a in anomalies:
+                        st.session_state.latched_anomalies.discard(a["metric"])
                     st.session_state.paused_state = None
-                    st.session_state.pending_diagnosis = primary
+                    primary = anomalies[0]
+                    st.session_state.pending_diagnosis = {
+                        "primary": primary,
+                        "anomalies": anomalies,
+                        "metric": primary["metric"],
+                        "value": primary["value"],
+                        "baseline": primary["baseline"],
+                        "label": " & ".join([a["label"] for a in anomalies]),
+                        "display_val": ", ".join([f"{a['label']}: {a['value']}" for a in anomalies])
+                    }
                     st.rerun(scope="app")
         else:
             if st.session_state.latched_anomalies:
@@ -198,7 +220,7 @@ with col_status:
     st.divider()
     st.markdown("##### 🧪 Anomaly Simulator (Test Scenarios)")
     sim_baselines = fetch_influxdb_baselines()
-    sim_col1, sim_col2, sim_col3, sim_col4 = st.columns(4)
+    sim_col1, sim_col2, sim_col3, sim_col4, sim_col5 = st.columns(5)
     with sim_col1:
         if st.button("🔥 High Temp (78°C)", use_container_width=True):
             m_path = METRICS_CONFIG["Reactor 2 Temperature"]["path"]
@@ -206,13 +228,22 @@ with col_status:
             st.session_state.simulated_overrides[m_path] = 78.5
             st.session_state.latched_anomalies.discard(m_path)
             st.session_state.paused_state = None
-            st.session_state.pending_diagnosis = {
+            sim_item = {
                 "label": "Reactor 2 Temperature",
                 "metric": m_path,
                 "value": 78.5,
                 "normal_low": b.get("normal_low"),
                 "normal_high": b.get("normal_high"),
                 "baseline": b
+            }
+            st.session_state.pending_diagnosis = {
+                "primary": sim_item,
+                "anomalies": [sim_item],
+                "metric": m_path,
+                "value": 78.5,
+                "baseline": b,
+                "label": "Reactor 2 Temperature",
+                "display_val": "78.5 °C"
             }
             st.rerun(scope="app")
     with sim_col2:
@@ -222,7 +253,7 @@ with col_status:
             st.session_state.simulated_overrides[m_path] = 92.0
             st.session_state.latched_anomalies.discard(m_path)
             st.session_state.paused_state = None
-            st.session_state.pending_diagnosis = {
+            sim_item = {
                 "label": "Reactor 2 Pressure",
                 "metric": m_path,
                 "value": 92.0,
@@ -230,24 +261,67 @@ with col_status:
                 "normal_high": b.get("normal_high"),
                 "baseline": b
             }
+            st.session_state.pending_diagnosis = {
+                "primary": sim_item,
+                "anomalies": [sim_item],
+                "metric": m_path,
+                "value": 92.0,
+                "baseline": b,
+                "label": "Reactor 2 Pressure",
+                "display_val": "92.0 psi"
+            }
             st.rerun(scope="app")
     with sim_col3:
-        if st.button("⚠️ High Flow (120 gpm)", use_container_width=True):
+        if st.button("⚠️ High Flow (18 gpm)", use_container_width=True):
             m_path = METRICS_CONFIG["CC-01 Flow Rate"]["path"]
             b = sim_baselines.get(m_path, {})
-            st.session_state.simulated_overrides[m_path] = 120.5
+            st.session_state.simulated_overrides[m_path] = 18.5
             st.session_state.latched_anomalies.discard(m_path)
             st.session_state.paused_state = None
-            st.session_state.pending_diagnosis = {
+            sim_item = {
                 "label": "CC-01 Flow Rate",
                 "metric": m_path,
-                "value": 120.5,
+                "value": 18.5,
                 "normal_low": b.get("normal_low"),
                 "normal_high": b.get("normal_high"),
                 "baseline": b
             }
+            st.session_state.pending_diagnosis = {
+                "primary": sim_item,
+                "anomalies": [sim_item],
+                "metric": m_path,
+                "value": 18.5,
+                "baseline": b,
+                "label": "CC-01 Flow Rate",
+                "display_val": "18.5 gpm"
+            }
             st.rerun(scope="app")
     with sim_col4:
+        if st.button("⚡ Flow + Press Surge", use_container_width=True):
+            f_path = METRICS_CONFIG["CC-01 Flow Rate"]["path"]
+            p_path = METRICS_CONFIG["Reactor 2 Pressure"]["path"]
+            fb = sim_baselines.get(f_path, {})
+            pb = sim_baselines.get(p_path, {})
+            st.session_state.simulated_overrides[f_path] = 18.5
+            st.session_state.simulated_overrides[p_path] = 112.4
+            st.session_state.latched_anomalies.discard(f_path)
+            st.session_state.latched_anomalies.discard(p_path)
+            st.session_state.paused_state = None
+            sim_items = [
+                {"label": "CC-01 Flow Rate", "metric": f_path, "value": 18.5, "normal_low": fb.get("normal_low"), "normal_high": fb.get("normal_high"), "baseline": fb},
+                {"label": "Reactor 2 Pressure", "metric": p_path, "value": 112.4, "normal_low": pb.get("normal_low"), "normal_high": pb.get("normal_high"), "baseline": pb}
+            ]
+            st.session_state.pending_diagnosis = {
+                "primary": sim_items[0],
+                "anomalies": sim_items,
+                "metric": p_path,
+                "value": 112.4,
+                "baseline": pb,
+                "label": "CC-01 Flow Rate & Reactor 2 Pressure",
+                "display_val": "Flow: 18.5 gpm, Pressure: 112.4 psi"
+            }
+            st.rerun(scope="app")
+    with sim_col5:
         if st.button("🔄 Reset Live", use_container_width=True):
             st.session_state.simulated_overrides.clear()
             st.session_state.paused_state = None
@@ -265,8 +339,9 @@ with col_approval:
     if st.session_state.get("pending_diagnosis") and st.session_state.paused_state is None:
         target = st.session_state.pending_diagnosis
         st.session_state.pending_diagnosis = None
+        target_anomalies = target.get("anomalies", [target.get("primary", target)])
 
-        with st.spinner(f"🤖 Auto-Sentinel: Diagnosing {target['label']} ({target['value']}) with Gemini..."):
+        with st.spinner(f"🤖 Auto-Sentinel: Correlating and diagnosing {target['label']} with Gemini..."):
             thread_id = f"diagnosis-{int(time.time() * 1000)}"
             st.session_state.config = {"configurable": {"thread_id": thread_id}}
 
@@ -276,7 +351,7 @@ with col_approval:
                 "context": {},
                 "report": "",
                 "baseline": target["baseline"],
-                "anomalies": [target],
+                "anomalies": target_anomalies,
                 "recommendation": {},
                 "approval": None,
                 "action_taken": False
@@ -297,13 +372,14 @@ with col_approval:
         rec = st.session_state.paused_state.get("recommendation", {})
         active_anomalies = st.session_state.paused_state.get("anomalies", [])
 
-        st.error("🚨 **ISSUE REPORTED TO SUPERVISOR — AWAITING OPERATOR DECISION**")
-        if active_anomalies:
-            a = active_anomalies[0]
+        if len(active_anomalies) > 1:
+            st.error(f"🚨 **CORRELATED MULTI-VARIABLE ISSUE ({len(active_anomalies)} METRICS) — AWAITING OPERATOR DECISION**")
+        else:
+            st.error("🚨 **ISSUE REPORTED TO SUPERVISOR — AWAITING OPERATOR DECISION**")
+
+        for a in active_anomalies:
             st.markdown(
-                f"- **Equipment / Metric:** `{a.get('metric')}`\n"
-                f"- **Observed Value:** `{a.get('value')}`\n"
-                f"- **InfluxDB Baseline:** `[{a.get('normal_low')}, {a.get('normal_high')}]`"
+                f"- **{a.get('label', a.get('metric'))}:** Observed `{a.get('value')}` (InfluxDB Baseline: `[{a.get('normal_low')}, {a.get('normal_high')}]`)"
             )
 
         st.markdown("#### 🧠 Agent Diagnosis & Analysis")
@@ -323,8 +399,8 @@ with col_approval:
                     st.session_state.config, {"approval": True}
                 )
                 final = st.session_state.agent.invoke(None, config=st.session_state.config)
-                if st.session_state.active_anomaly:
-                    st.session_state.latched_anomalies.add(st.session_state.active_anomaly["metric"])
+                for a in active_anomalies:
+                    st.session_state.latched_anomalies.add(a.get("metric"))
                 st.session_state.paused_state = None
                 st.session_state.last_result = final
 
@@ -345,9 +421,9 @@ with col_approval:
                 except Exception:
                     entry = {
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "metric_path": st.session_state.active_anomaly.get("metric") if st.session_state.active_anomaly else "unknown",
-                        "value": st.session_state.active_anomaly.get("value") if st.session_state.active_anomaly else None,
-                        "anomalies": [st.session_state.active_anomaly] if st.session_state.active_anomaly else [],
+                        "metric_path": active_anomalies[0].get("metric") if active_anomalies else "unknown",
+                        "value": active_anomalies[0].get("value") if active_anomalies else None,
+                        "anomalies": active_anomalies,
                         "recommendation": st.session_state.paused_state.get("recommendation", {}) if st.session_state.paused_state else {},
                         "approval": False,
                         "action_taken": False
@@ -355,8 +431,8 @@ with col_approval:
                     with open("agent_audit_log.jsonl", "a") as f:
                         f.write(json.dumps(entry) + "\n")
 
-                if st.session_state.active_anomaly:
-                    st.session_state.latched_anomalies.add(st.session_state.active_anomaly["metric"])
+                for a in active_anomalies:
+                    st.session_state.latched_anomalies.add(a.get("metric"))
                 st.session_state.paused_state = None
                 st.session_state.approval_message = "⚠️ **Action rejected by operator. Logged to audit trail. No work order created.**"
                 st.rerun(scope="app")

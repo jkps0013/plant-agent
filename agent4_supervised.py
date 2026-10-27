@@ -58,15 +58,19 @@ def observe(state: AgentState) -> AgentState:
 
 
 def detect(state: AgentState) -> AgentState:
+    existing_anomalies = state.get("anomalies") or []
+    if existing_anomalies:
+        print(f"[DETECT] Preserving {len(existing_anomalies)} pre-detected process anomalies")
+        return state
+
     value = state.get("value")
     low = state["baseline"].get("normal_low")
     high = state["baseline"].get("normal_high")
-
-    state["anomalies"] = []
+    anomalies = []
 
     if value is not None and low is not None and high is not None:
         if value < low or value > high:
-            state["anomalies"].append({
+            anomalies.append({
                 "metric": state["metric_path"],
                 "value": value,
                 "normal_low": low,
@@ -78,6 +82,7 @@ def detect(state: AgentState) -> AgentState:
     else:
         print(f"[DETECT] Skipping check (value={value}, low={low}, high={high})")
 
+    state["anomalies"] = anomalies
     return state
 
 
@@ -113,53 +118,98 @@ def generate_ai_content(prompt: str) -> str:
     raise RuntimeError("All configured Gemini API models exhausted or unavailable.")
 
 
-def deterministic_diagnosis(ctx: dict, anomaly: dict) -> str:
-    metric = ctx.get("metric", "Temperature")
-    equipment = ctx.get("equipment", "Reactor2")
-    val = anomaly.get("value", "unknown")
-    low = anomaly.get("normal_low", "unknown")
-    high = anomaly.get("normal_high", "unknown")
+def deterministic_diagnosis(ctx: dict, anomalies: list) -> str:
+    anomaly_metrics = {a.get("metric", ""): a for a in anomalies}
+    has_temp = any("Temp" in m for m in anomaly_metrics)
+    has_press = any("Press" in m for m in anomaly_metrics)
+    has_flow = any("Flow" in m for m in anomaly_metrics)
 
-    if "Temp" in metric:
+    if has_flow and has_press:
+        flow_a = next(a for m, a in anomaly_metrics.items() if "Flow" in m)
+        press_a = next(a for m, a in anomaly_metrics.items() if "Press" in m)
         return (
-            f"The elevated temperature ({val} °C) on {equipment} indicates cooling system jacket restriction "
-            f"or thermocouple RTD sensor drift against historical baseline [{low}, {high}]. "
+            f"Correlated anomaly detected: Both CC-01 coolant flow ({flow_a['value']} gpm) and Reactor 2 pressure ({press_a['value']} psi) "
+            f"are elevated simultaneously above historical baselines. This cross-variable pattern points to an upstream feed pump surge "
+            f"or supply regulator malfunction creating simultaneous hydraulic throughput and vessel pressurization while temperature remains stable. "
+            f"Confidence: high (Multi-Variable Correlation Engine)."
+        )
+    elif has_flow and has_temp:
+        flow_a = next(a for m, a in anomaly_metrics.items() if "Flow" in m)
+        temp_a = next(a for m, a in anomaly_metrics.items() if "Temp" in m)
+        return (
+            f"Correlated anomaly detected: Reactor 2 temperature ({temp_a['value']} °C) is elevated while CC-01 cooling loop flow ({flow_a['value']} gpm) "
+            f"is abnormal. This indicates heat transfer deficiency or cooling jacket flow starvation leading to thermal buildup in Reactor 2. "
+            f"Confidence: high (Multi-Variable Correlation Engine)."
+        )
+    elif has_press and has_temp:
+        press_a = next(a for m, a in anomaly_metrics.items() if "Press" in m)
+        temp_a = next(a for m, a in anomaly_metrics.items() if "Temp" in m)
+        return (
+            f"Correlated anomaly detected: Simultaneous elevation of Reactor 2 temperature ({temp_a['value']} °C) and pressure ({press_a['value']} psi). "
+            f"This points to an exothermic process reaction surge causing simultaneous thermal expansion and vapor pressurization inside Reactor 2. "
+            f"Confidence: high (Multi-Variable Correlation Engine)."
+        )
+    elif has_temp:
+        a = next(a for m, a in anomaly_metrics.items() if "Temp" in m)
+        return (
+            f"Elevated temperature ({a['value']} °C) on Reactor2 indicates cooling jacket restriction "
+            f"or thermocouple RTD sensor drift against historical baseline [{a.get('normal_low')}, {a.get('normal_high')}]. "
             f"Confidence: high (Deterministic Plant Safety Engine fallback)."
         )
-    elif "Press" in metric:
+    elif has_press:
+        a = next(a for m, a in anomaly_metrics.items() if "Press" in m)
         return (
-            f"The pressure drift ({val} psi) on {equipment} indicates relief valve bypass or supply pressure regulator issue "
-            f"outside expected bounds [{low}, {high}]. "
+            f"Pressure drift ({a['value']} psi) on Reactor2 indicates relief valve bypass or supply pressure regulator issue "
+            f"outside expected bounds [{a.get('normal_low')}, {a.get('normal_high')}]. "
+            f"Confidence: high (Deterministic Plant Safety Engine fallback)."
+        )
+    elif has_flow:
+        a = next(a for m, a in anomaly_metrics.items() if "Flow" in m)
+        return (
+            f"Flow rate anomaly ({a['value']} gpm) on CC-01 indicates control valve stiction or pump cavitation "
+            f"outside expected bounds [{a.get('normal_low')}, {a.get('normal_high')}]. "
             f"Confidence: high (Deterministic Plant Safety Engine fallback)."
         )
     else:
-        return (
-            f"Flow rate anomaly ({val} gpm) on {equipment} indicates control valve stiction or pump cavitation "
-            f"outside expected bounds [{low}, {high}]. "
-            f"Confidence: high (Deterministic Plant Safety Engine fallback)."
-        )
+        return "Process metrics deviation detected on Line 3. Operational inspection recommended."
 
 
-def deterministic_recommendation(ctx: dict, anomaly: dict, diagnosis_text: str) -> dict:
-    metric = ctx.get("metric", "Temperature")
-    equipment = ctx.get("equipment", "Reactor2")
-    val = anomaly.get("value", 0)
+def deterministic_recommendation(ctx: dict, anomalies: list, diagnosis_text: str) -> dict:
+    anomaly_metrics = {a.get("metric", ""): a for a in anomalies}
+    has_flow = any("Flow" in m for m in anomaly_metrics)
+    has_press = any("Press" in m for m in anomaly_metrics)
+    has_temp = any("Temp" in m for m in anomaly_metrics)
 
-    if "Temp" in metric:
-        action = f"inspect {equipment}"
-        urgency = "Address promptly during current shift"
-        confidence = "high (Deterministic Rule Fallback)"
-        rationale = f"Observed temperature {val} °C exceeds operational baseline."
-    elif "Press" in metric:
-        action = f"check {equipment}"
+    if has_flow and has_press:
+        action = "inspect CC-01"
         urgency = "Immediate shift inspection"
-        confidence = "medium-high (Deterministic Rule Fallback)"
-        rationale = f"Observed pressure {val} psi deviated from nominal operating limits."
+        confidence = "high"
+        rationale = "Simultaneous surge in cooling water flow and reactor pressure indicates an upstream supply regulator failure or primary feed pump overpressurization."
+    elif has_flow and has_temp:
+        action = "inspect CC-01"
+        urgency = "Address promptly during current shift"
+        confidence = "high"
+        rationale = "Coolant flow abnormality combined with elevated reactor temperature requires immediate heat exchanger and jacket inspection."
+    elif has_press and has_temp:
+        action = "inspect Reactor2"
+        urgency = "Immediate shift inspection"
+        confidence = "high"
+        rationale = "Coincident temperature and pressure rises indicate thermal vapor expansion or exothermic runaway risk."
+    elif has_temp:
+        action = "inspect Reactor2"
+        urgency = "Address promptly during current shift"
+        confidence = "high"
+        rationale = "Observed temperature exceeds operational baseline."
+    elif has_press:
+        action = "check Reactor2"
+        urgency = "Immediate shift inspection"
+        confidence = "medium-high"
+        rationale = "Observed pressure deviated from nominal operating limits."
     else:
-        action = f"verify {equipment}"
+        action = "verify CC-01"
         urgency = "Within 4 hours"
-        confidence = "high (Deterministic Rule Fallback)"
-        rationale = f"Flow rate {val} gpm deviates from normal process transfer baseline."
+        confidence = "high"
+        rationale = "Flow rate deviates from normal process transfer baseline."
 
     return {
         "action": action,
@@ -172,9 +222,16 @@ def deterministic_recommendation(ctx: dict, anomaly: dict, diagnosis_text: str) 
 
 def diagnose(state: AgentState) -> AgentState:
     ctx = state["context"]
-    anomaly = state["anomalies"][0]
+    anomalies = state.get("anomalies", [])
+    if not anomalies and state.get("value") is not None:
+        anomalies = [{
+            "metric": state["metric_path"],
+            "value": state["value"],
+            "normal_low": state["baseline"].get("normal_low"),
+            "normal_high": state["baseline"].get("normal_high")
+        }]
 
-    line_history = get_line_history(ctx.get("site"), ctx.get("area"), ctx.get("line"), hours=48)
+    line_history = get_line_history(ctx.get("site", "Bristol"), ctx.get("area", "Polymerization"), ctx.get("line", "Line3"), hours=48)
 
     history_summary_lines = []
     for metric, vals in line_history.items():
@@ -187,22 +244,33 @@ def diagnose(state: AgentState) -> AgentState:
         )
     history_summary = "\n".join(history_summary_lines)
 
+    anomalies_lines = []
+    for a in anomalies:
+        m_name = a.get("label", a.get("metric", "Unknown"))
+        val = a.get("value")
+        low = a.get("normal_low")
+        high = a.get("normal_high")
+        direction = "ABOVE NORMAL" if val is not None and high is not None and val > high else "BELOW NORMAL"
+        anomalies_lines.append(f"- {m_name}: currently {val} ({direction}, normal baseline [{low}, {high}])")
+    anomalies_summary = "\n".join(anomalies_lines)
+
     prompt = (
-        f"On {ctx.get('line')} at {ctx.get('site')}, {ctx.get('equipment')} "
-        f"{ctx.get('metric')} is currently {anomaly['value']}, outside its "
-        f"InfluxDB baseline normal range of {anomaly['normal_low']} to {anomaly['normal_high']}.\n\n"
-        f"Here is the current reading and historical InfluxDB baseline for every metric "
-        f"on this line:\n{history_summary}\n\n"
-        f"What is the most likely cause? Name the specific equipment if "
-        f"possible. State your confidence. Two or three plain sentences, "
-        f"no markdown, no headers, no bullet points."
+        f"You are the autonomous supervisory engineer for Line 3 in the Polymerization unit at Bristol.\n\n"
+        f"ACTIVE PROCESS ANOMALIES DETECTED:\n{anomalies_summary}\n\n"
+        f"COMPLETE LINE TELEMETRY & HISTORICAL INFLUXDB BASELINES:\n{history_summary}\n\n"
+        f"Analyze the physical correlation between all observed line metrics (specifically examining relationships "
+        f"between cooling flow rate, reactor pressure, and reactor temperature). "
+        f"For example, if both flow rate and pressure have increased simultaneously while temperature is stable, determine whether this indicates "
+        f"an upstream pump surge, downstream line restriction/backpressure, or supply regulator malfunction. "
+        f"State the most likely root cause, identify the specific equipment responsible, and state your confidence. "
+        f"Two or three direct sentences, no markdown formatting, no headers, no bullet points."
     )
 
     try:
         state["report"] = generate_ai_content(prompt)
     except Exception as e:
         print(f"[DIAGNOSE FALLBACK] {e}")
-        state["report"] = deterministic_diagnosis(ctx, anomaly)
+        state["report"] = deterministic_diagnosis(ctx, anomalies)
 
     return state
 
@@ -225,35 +293,41 @@ def parse_recommendation(text: str) -> dict:
 
 def recommend(state: AgentState) -> AgentState:
     ctx = state["context"]
-    anomaly = state["anomalies"][0]
+    anomalies = state.get("anomalies", [])
+    if not anomalies and state.get("value") is not None:
+        anomalies = [{"metric": state.get("metric_path", ""), "value": state.get("value", 0)}]
 
-    metric_name = ctx.get("metric", "Temperature")
-    if "Pressure" in metric_name:
-        safety_limit = 110.0
-    elif "Flow" in metric_name:
-        safety_limit = 8.0
-    else:
-        safety_limit = 95.0
+    limits_info = []
+    min_hours = None
+    for a in anomalies:
+        m = a.get("metric", "")
+        val = a.get("value", 0)
+        if "Press" in m:
+            s_limit = 110.0
+            drift_rate = 2.0
+        elif "Flow" in m:
+            s_limit = 8.0 if val < 10 else 20.0
+            drift_rate = 1.0
+        else:
+            s_limit = 95.0
+            drift_rate = (3.6 / 28) * 60
+        headroom = abs(s_limit - val)
+        hours = round(headroom / drift_rate, 1) if drift_rate > 0 else None
+        if hours is not None and (min_hours is None or hours < min_hours):
+            min_hours = hours
+        limits_info.append(f"{a.get('label', m)}: current {val}, safety limit {s_limit}")
 
-    headroom = abs(safety_limit - anomaly["value"])
-    drift_rate_per_hour = (3.6 / 28) * 60
-    hours_to_limit = (
-        round(headroom / drift_rate_per_hour, 1)
-        if drift_rate_per_hour > 0 else None
-    )
-
+    limits_str = "; ".join(limits_info)
     equip = ctx.get("equipment", "Reactor2")
+
     prompt = (
         f"Diagnosis: {state['report']}\n\n"
-        f"Current value: {anomaly['value']}. Safety limit: {safety_limit}. "
-        f"Estimated time to reach safety limit at current drift rate: "
-        f"approximately {hours_to_limit} hours.\n\n"
-        f"Produce a structured advisory with exactly four fields, each on "
-        f"its own line, no markdown formatting:\n"
-        f"ACTION: <action using a permitted verb: inspect, schedule, notify, check, verify, or monitor on {equip}>\n"
+        f"Observed limits: {limits_str}. Estimated time to safety limit: approximately {min_hours} hours.\n\n"
+        f"Produce a structured advisory with exactly four fields, each on its own line, no markdown formatting:\n"
+        f"ACTION: <action using a permitted verb: inspect, schedule, notify, check, verify, or monitor on {equip} or CC-01>\n"
         f"URGENCY: <how soon, in plain shift-supervisor language>\n"
         f"CONFIDENCE: <low, medium, medium-high, or high>\n"
-        f"RATIONALE: <one sentence tying the evidence together>"
+        f"RATIONALE: <one sentence synthesizing the correlated evidence across all abnormal metrics>"
     )
 
     try:
@@ -261,11 +335,11 @@ def recommend(state: AgentState) -> AgentState:
         rec = parse_recommendation(raw_text)
         rec["raw"] = raw_text
         if not rec.get("action"):
-            rec = deterministic_recommendation(ctx, anomaly, state["report"])
+            rec = deterministic_recommendation(ctx, anomalies, state["report"])
         state["recommendation"] = rec
     except Exception as e:
         print(f"[RECOMMEND FALLBACK] {e}")
-        state["recommendation"] = deterministic_recommendation(ctx, anomaly, state["report"])
+        state["recommendation"] = deterministic_recommendation(ctx, anomalies, state["report"])
 
     return state
 
